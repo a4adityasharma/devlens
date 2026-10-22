@@ -1,0 +1,99 @@
+# Local, offline Semgrep rules for DevLens AI's Security Agent.
+#
+# Deliberately NOT using `--config=auto` or a registry ruleset ID
+# (`p/security-audit` etc.) — semgrep's rule registry lives at
+# semgrep.dev, which is outside this project's sandbox's allowed network
+# domains in every session so far. Local rule files need zero network
+# access and were verified to work end-to-end in this sandbox (see
+# docs/PROGRESS.md's session notes on this phase).
+#
+# This is a deliberately small, high-confidence starter set — architecture
+# doc §16/§36 both favor a few solid checks over broad, noisy coverage for
+# the MVP. Add rules incrementally, and prefer `metadata.category` +
+# `metadata.recommendation` on every rule (security_scanner.py reads both)
+# so the agent's output is immediately useful, not just "found something".
+
+rules:
+  - id: python-shell-injection
+    languages: [python]
+    severity: ERROR
+    message: "Shell command executed with shell=True — if any part of the command comes from user input, this allows arbitrary command execution."
+    metadata:
+      category: "Command Injection"
+      recommendation: "Avoid shell=True. Pass the command as a list of arguments instead, or use shlex.quote() to sanitize any user-controlled portion."
+    patterns:
+      - pattern-either:
+          - pattern: subprocess.call($CMD, shell=True, ...)
+          - pattern: subprocess.run($CMD, shell=True, ...)
+          - pattern: subprocess.Popen($CMD, shell=True, ...)
+          - pattern: os.system($CMD)
+
+  - id: python-eval-exec
+    languages: [python]
+    severity: ERROR
+    message: "Use of eval()/exec() on dynamic input can allow arbitrary code execution."
+    metadata:
+      category: "Code Injection"
+      recommendation: "Avoid eval/exec on any data that isn't a fixed, trusted literal. Use ast.literal_eval() for parsing simple data structures instead."
+    patterns:
+      - pattern-either:
+          - pattern: eval(...)
+          - pattern: exec(...)
+
+  - id: python-sql-string-concat
+    languages: [python]
+    severity: ERROR
+    message: "SQL query built via string concatenation, then executed — likely SQL injection if any part is user-controlled."
+    metadata:
+      category: "SQL Injection"
+      recommendation: "Use parameterized queries (e.g. cursor.execute(query, params)) instead of building SQL with string concatenation or f-strings."
+    patterns:
+      - pattern-either:
+          - pattern: $CURSOR.execute("..." + ...)
+          - pattern: $CURSOR.execute(f"...{...}...")
+          - pattern: |
+              $QUERY = "..." + ...
+              ...
+              $CURSOR.execute($QUERY)
+
+  - id: python-hardcoded-secret
+    languages: [python]
+    severity: WARNING
+    message: "Hardcoded value assigned to a variable named like a secret/credential."
+    metadata:
+      category: "Hardcoded Credentials"
+      recommendation: "Load secrets from environment variables or a secrets manager, never commit them as literals."
+    patterns:
+      - pattern-regex: (?i)^(API_KEY|SECRET_KEY|PASSWORD|ACCESS_TOKEN|PRIVATE_KEY)\s*=\s*["'][A-Za-z0-9_\-]{8,}["']
+
+  - id: js-eval
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: "Use of eval() on dynamic input can allow arbitrary code execution."
+    metadata:
+      category: "Code Injection"
+      recommendation: "Avoid eval(). If parsing JSON, use JSON.parse() instead."
+    patterns:
+      - pattern: eval(...)
+
+  - id: js-child-process-exec
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: "child_process.exec() with a dynamically-built command string allows shell injection if any part is user-controlled."
+    metadata:
+      category: "Command Injection"
+      recommendation: "Use execFile() or spawn() with an argument array instead of a shell string, so user input can't be interpreted as shell syntax."
+    patterns:
+      - pattern-either:
+          - pattern: $CP.exec($CMD, ...)
+          - pattern: exec($CMD, ...)
+
+  - id: js-hardcoded-secret
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: "Hardcoded value assigned to a variable named like a secret/credential."
+    metadata:
+      category: "Hardcoded Credentials"
+      recommendation: "Load secrets from environment variables or a secrets manager, never commit them as literals."
+    patterns:
+      - pattern-regex: (?i)(apiKey|secretKey|password|accessToken|privateKey)\s*[:=]\s*["'][A-Za-z0-9_\-]{8,}["']
